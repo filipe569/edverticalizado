@@ -172,9 +172,21 @@ app.post('/api/admin/test-gemini', async (_req, res) => {
     });
   } catch (err: any) {
     console.error('Erro no teste do Gemini:', err);
-    return res.status(500).json({
+    let raw = String(err?.message || '');
+    try {
+      if (raw.trim().startsWith('{')) {
+        const p = JSON.parse(raw);
+        if (p.error?.message) raw = p.error.message;
+      }
+    } catch {}
+    const is503 = raw.includes('503') || raw.includes('high demand') || raw.includes('UNAVAILABLE');
+    const msg = is503
+      ? 'Os servidores do Google Gemini estão com alta demanda temporária (503). O sistema testou modelos alternativos automaticamente; aguarde alguns instantes e tente novamente.'
+      : raw || 'Falha ao conectar com o modelo Gemini.';
+
+    return res.status(is503 ? 503 : 500).json({
       success: false,
-      error: err?.message || 'Falha ao conectar com o modelo Gemini.',
+      error: msg,
     });
   }
 });
@@ -203,8 +215,13 @@ async function generateContentWithRetryAndFallback(
     config?: any;
   }
 ) {
-  // Candidate models: primary fast model, followed by latest flash alias and flash lite
-  const candidateModels = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
+  // Candidate models in order: if flash has a demand spike, flash-lite or pro takes over immediately
+  const candidateModels = [
+    'gemini-3.8-flash',
+    'gemini-3.1-flash-lite',
+    'gemini-flash-latest',
+    'gemini-3.1-pro-preview',
+  ];
   let lastError: any = null;
 
   for (const model of candidateModels) {

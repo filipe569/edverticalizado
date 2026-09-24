@@ -23,7 +23,63 @@ export function setStoredGeminiKey(key: string): void {
   }
 }
 
-// Fallback client-side generator with candidate models
+/**
+ * Formats raw Gemini errors (including 503 UNAVAILABLE or JSON strings) into friendly user messages.
+ */
+export function formatGeminiErrorMessage(err: any): string {
+  let rawMsg = '';
+  if (typeof err === 'string') {
+    rawMsg = err;
+  } else if (err?.message) {
+    rawMsg = err.message;
+  } else {
+    rawMsg = String(err || '');
+  }
+
+  // If the error is a raw JSON string like {"error":{"code":503,"message":"..."}}
+  try {
+    const trimmed = rawMsg.trim();
+    if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+      const parsed = JSON.parse(trimmed);
+      if (parsed.error?.message) {
+        rawMsg = parsed.error.message;
+      }
+    }
+  } catch {}
+
+  const is503 =
+    rawMsg.includes('503') ||
+    rawMsg.includes('high demand') ||
+    rawMsg.includes('UNAVAILABLE') ||
+    rawMsg.includes('overloaded');
+
+  if (is503) {
+    return 'Os servidores do Google Gemini estão com alta demanda temporária (503). O sistema tenta modelos alternativos automaticamente; aguarde alguns segundos e tente novamente.';
+  }
+
+  const is429 =
+    rawMsg.includes('429') ||
+    rawMsg.includes('quota') ||
+    rawMsg.includes('RESOURCE_EXHAUSTED') ||
+    rawMsg.includes('rate limit');
+
+  if (is429) {
+    return 'Limite de requisições por minuto atingido (429). Por favor, aguarde cerca de 30 segundos.';
+  }
+
+  const isApiKeyInvalid =
+    rawMsg.includes('API_KEY_INVALID') ||
+    rawMsg.includes('API key not valid') ||
+    rawMsg.includes('invalid API key');
+
+  if (isApiKeyInvalid) {
+    return 'Chave de API do Gemini inválida. Por favor, verifique a chave inserida no Painel Admin.';
+  }
+
+  return rawMsg || 'Falha ao processar com o Google Gemini.';
+}
+
+// Fallback client-side generator with candidate models and automatic retry
 async function runClientSideGemini(prompt: string, config?: any): Promise<string> {
   const apiKey = getStoredGeminiKey();
   if (!apiKey) {
@@ -36,26 +92,49 @@ async function runClientSideGemini(prompt: string, config?: any): Promise<string
     apiKey,
   });
 
-  const candidateModels = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
+  // Candidate models: if gemini-3.8-flash has a 503 spike, flash-lite and pro provide immediate fallbacks!
+  const candidateModels = [
+    'gemini-3.8-flash',
+    'gemini-3.1-flash-lite',
+    'gemini-flash-latest',
+    'gemini-3.1-pro-preview',
+  ];
   let lastError: any = null;
 
   for (const model of candidateModels) {
-    try {
-      const response = await ai.models.generateContent({
-        model,
-        contents: prompt,
-        config,
-      });
-      return response.text || '';
-    } catch (err: any) {
-      lastError = err;
-      const msg = String(err?.message || '');
-      console.warn(`[Client Gemini] Falha no modelo ${model}:`, msg);
-      // If transient or model not found, try next candidate
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const response = await ai.models.generateContent({
+          model,
+          contents: prompt,
+          config,
+        });
+        return response.text || '';
+      } catch (err: any) {
+        lastError = err;
+        const msg = String(err?.message || '');
+        const isTransient =
+          msg.includes('503') ||
+          msg.includes('429') ||
+          msg.includes('high demand') ||
+          msg.includes('UNAVAILABLE') ||
+          msg.includes('RESOURCE_EXHAUSTED') ||
+          msg.includes('overloaded');
+
+        console.warn(`[Client Gemini] Tentativa ${attempt} no modelo '${model}' falhou: ${msg}`);
+
+        if (isTransient && attempt === 1) {
+          // Brief pause before retry on transient error
+          await new Promise((resolve) => setTimeout(resolve, 800));
+        } else {
+          // Try next candidate model
+          break;
+        }
+      }
     }
   }
 
-  throw lastError || new Error('Não foi possível obter resposta do Gemini.');
+  throw new Error(formatGeminiErrorMessage(lastError));
 }
 
 /**
@@ -78,9 +157,21 @@ export async function parseEditalWithAI(rawText: string, fallbackInfo?: any): Pr
       if (json.success && json.data) {
         return json.data;
       }
+    } else if (contentType.includes('application/json')) {
+      const errJson = await res.json();
+      if (errJson.error) {
+        // If server responded with an error, throw formatted message
+        throw new Error(formatGeminiErrorMessage(errJson.error));
+      }
     }
-  } catch (e) {
-    console.log('[GeminiService] Servidor inacessível, alternando para execução direta no navegador (Netlify):', e);
+  } catch (e: any) {
+    const msg = e?.message || '';
+    if (msg.includes('503') || msg.includes('demanda') || msg.includes('UNAVAILABLE')) {
+      // Proceed to client-side fallback
+      console.log('[GeminiService] Servidor com 503, tentando via navegador com modelos alternativos...');
+    } else {
+      console.log('[GeminiService] Servidor inacessível, alternando para execução direta no navegador (Netlify):', e);
+    }
   }
 
   // 2. Client-side fallback (Netlify / Static Hosting)
@@ -179,9 +270,19 @@ export async function generateScheduleWithAI(payload: {
       if (json.data) {
         return json.data;
       }
+    } else if (contentType.includes('application/json')) {
+      const errJson = await res.json();
+      if (errJson.error) {
+        throw new Error(formatGeminiErrorMessage(errJson.error));
+      }
     }
-  } catch (e) {
-    console.log('[GeminiService] Servidor inacessível, alternando para execução direta no navegador (Netlify):', e);
+  } catch (e: any) {
+    const msg = e?.message || '';
+    if (msg.includes('503') || msg.includes('demanda') || msg.includes('UNAVAILABLE')) {
+      console.log('[GeminiService] Servidor com 503, tentando via navegador com modelos alternativos...');
+    } else {
+      console.log('[GeminiService] Servidor inacessível, alternando para execução direta no navegador (Netlify):', e);
+    }
   }
 
   // 2. Client-side fallback (Netlify / Static Hosting)
@@ -301,7 +402,7 @@ Retorne em formato JSON estrito conforme o schema.`;
 }
 
 /**
- * Tests Gemini connection (supports both server proxy and direct client-side for Netlify).
+ * Tests Gemini connection across candidate models with automatic fallback.
  */
 export async function testGeminiConnection(keyToTest?: string): Promise<{
   success: boolean;
@@ -309,41 +410,62 @@ export async function testGeminiConnection(keyToTest?: string): Promise<{
   response?: string;
   source: 'server' | 'browser-direct';
 }> {
-  // 1. Try server test first
+  // 1. Try server test first (if running on Node.js)
   try {
     const res = await fetch('/api/admin/test-gemini', { method: 'POST' });
     const contentType = res.headers.get('content-type') || '';
-    if (res.ok && contentType.includes('application/json')) {
+    if (contentType.includes('application/json')) {
       const data = await res.json();
-      if (data.success) {
+      if (res.ok && data.success) {
         return {
           success: true,
           message: data.message || 'Conexão com Gemini validada no servidor!',
           response: data.response,
           source: 'server',
         };
+      } else if (!res.ok) {
+        // If server failed (e.g. 503 or 404), fall through to browser test with fallback models
+        console.warn('[testGeminiConnection] Servidor retornou:', data?.error);
       }
     }
   } catch (e) {
-    // Server not found, fallback to browser test
+    // Server not reached, fallback to browser test
   }
 
-  // 2. Direct browser test (ideal for Netlify)
+  // 2. Direct browser test with candidate models and fallbacks (ideal for Netlify and 503 handling)
   const key = keyToTest?.trim() || getStoredGeminiKey();
   if (!key) {
     throw new Error('Nenhuma chave fornecida para teste. Insira sua chave do Gemini.');
   }
 
   const ai = new GoogleGenAI({ apiKey: key });
-  const response = await ai.models.generateContent({
-    model: 'gemini-3.8-flash',
-    contents: 'Por favor responda apenas com: CONECTADO_NETLIFY',
-  });
+  const candidateModels = [
+    'gemini-3.8-flash',
+    'gemini-3.1-flash-lite',
+    'gemini-flash-latest',
+    'gemini-3.1-pro-preview',
+  ];
+  let lastError: any = null;
 
-  return {
-    success: true,
-    message: 'Conectado com sucesso direto pelo navegador (compatível com Netlify e hospedagens estáticas)!',
-    response: response.text?.trim() || 'CONECTADO_NETLIFY',
-    source: 'browser-direct',
-  };
+  for (const model of candidateModels) {
+    try {
+      const response = await ai.models.generateContent({
+        model,
+        contents: 'Olá Gemini! Por favor responda apenas: CONECTADO_OK',
+      });
+      return {
+        success: true,
+        message: `Conectado com sucesso via ${model} (compatível com Netlify e Servidor)!`,
+        response: response.text?.trim() || 'CONECTADO_OK',
+        source: 'browser-direct',
+      };
+    } catch (err: any) {
+      lastError = err;
+      console.warn(`[testGeminiConnection] Modelo ${model} indisponível:`, err?.message || err);
+      // Wait slightly before trying next model
+      await new Promise((r) => setTimeout(r, 400));
+    }
+  }
+
+  throw new Error(formatGeminiErrorMessage(lastError));
 }
