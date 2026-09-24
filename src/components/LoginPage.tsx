@@ -28,14 +28,11 @@ export const LoginPage: React.FC = () => {
     setError(null);
     setIsLoading(true);
 
-    setTimeout(() => {
-      const res = login(username, password);
-      if (!res.success) {
-        setError(res.error || 'Credenciais inválidas.');
-        setIsLoading(false);
-      }
-      // On success, AuthContext updates currentUser and App switches to main dashboard
-    }, 200);
+    const res = login(username, password);
+    if (!res.success) {
+      setError(res.error || 'Credenciais inválidas.');
+      setIsLoading(false);
+    }
   };
 
   const handleSelectAccount = (userUsername: string) => {
