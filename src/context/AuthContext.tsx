@@ -68,10 +68,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const found = list.find((u) => u.id === savedId);
         if (found) return found;
       }
-      // Default to first user (admin) if not explicitly logged out
-      return list[0] || null;
+      // Require explicit login if not already authenticated
+      return null;
     } catch {
-      return DEFAULT_USERS[0];
+      return null;
     }
   });
 
@@ -97,11 +97,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       .then((data) => {
         if (data.success && Array.isArray(data.users) && data.users.length > 0) {
           setUsers(data.users);
-          // If currentUser is not in list, fallback to first
+          // If currentUser is already logged in, update their data; otherwise remain on login page
           setCurrentUser((curr) => {
-            if (!curr) return data.users[0];
+            if (!curr) return null;
             const found = data.users.find((u: User) => u.id === curr.id);
-            return found || data.users[0];
+            return found || null;
           });
         }
       })
@@ -133,6 +133,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const logout = () => {
+    try {
+      localStorage.removeItem('edital_current_user_id');
+    } catch (e) {}
     setCurrentUser(null);
   };
 

@@ -3,6 +3,11 @@ import { useAuth } from '../context/AuthContext';
 import { useConcurso } from '../context/ConcursoContext';
 import { User } from '../types/concurso';
 import {
+  getStoredGeminiKey,
+  setStoredGeminiKey,
+  testGeminiConnection,
+} from '../services/geminiService';
+import {
   Users,
   UserPlus,
   Shield,
@@ -22,6 +27,8 @@ import {
   Eye,
   EyeOff,
   ExternalLink,
+  Copy,
+  Check,
 } from 'lucide-react';
 
 interface UserManagementModalProps {
@@ -89,6 +96,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
   const [showKeyPassword, setShowKeyPassword] = useState(false);
   const [isSavingKey, setIsSavingKey] = useState(false);
   const [isTestingKey, setIsTestingKey] = useState(false);
+  const [hasCopiedLink, setHasCopiedLink] = useState(false);
   const [testResponse, setTestResponse] = useState<{
     success: boolean;
     message: string;
@@ -98,7 +106,13 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
   // Fetch Gemini status when admin opens the modal or switches to 'gemini' tab
   const fetchGeminiStatus = () => {
     fetch('/api/admin/gemini-status')
-      .then((res) => res.json())
+      .then((res) => {
+        const contentType = res.headers.get('content-type') || '';
+        if (!res.ok || !contentType.includes('application/json')) {
+          throw new Error('Not JSON');
+        }
+        return res.json();
+      })
       .then((data) => {
         if (data.success) {
           setGeminiStatus({
@@ -109,7 +123,25 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
           });
         }
       })
-      .catch((e) => console.warn('Erro ao consultar status do Gemini:', e));
+      .catch(() => {
+        // Fallback for Netlify / Static Host: read from localStorage
+        const localKey = getStoredGeminiKey();
+        if (localKey) {
+          setGeminiStatus({
+            hasKey: true,
+            isCustom: true,
+            maskedKey: localKey.length > 8 ? `${localKey.slice(0, 6)}...${localKey.slice(-4)}` : '********',
+            source: 'custom',
+          });
+        } else {
+          setGeminiStatus({
+            hasKey: false,
+            isCustom: false,
+            maskedKey: '',
+            source: 'none',
+          });
+        }
+      });
   };
 
   useEffect(() => {
@@ -236,21 +268,25 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
 
     setIsSavingKey(true);
     try {
-      const res = await fetch('/api/admin/gemini-key', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ apiKey: inputApiKey }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        showToast('🔑', inputApiKey ? 'Chave Gemini salva com sucesso!' : 'Chave personalizada removida.');
-        setInputApiKey('');
-        fetchGeminiStatus();
-      } else {
-        showToast('⚠️', data.error || 'Erro ao salvar chave.');
+      // 1. Save to local storage for direct browser execution (Netlify / Static Hosts)
+      setStoredGeminiKey(inputApiKey);
+
+      // 2. Also try server endpoint (Node.js full-stack)
+      try {
+        await fetch('/api/admin/gemini-key', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ apiKey: inputApiKey }),
+        });
+      } catch (err) {
+        // Server may not be running on Netlify; local storage is sufficient
       }
+
+      showToast('🔑', inputApiKey ? 'Chave Gemini salva (compatível com Netlify e Servidor)!' : 'Chave removida.');
+      setInputApiKey('');
+      fetchGeminiStatus();
     } catch {
-      showToast('⚠️', 'Erro de conexão com o servidor.');
+      showToast('⚠️', 'Erro ao salvar chave.');
     } finally {
       setIsSavingKey(false);
     }
@@ -261,16 +297,16 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
     if (!isAdmin) return;
     setIsSavingKey(true);
     try {
-      const res = await fetch('/api/admin/gemini-key', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ apiKey: '' }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        showToast('🔄', 'Restaurado para a chave padrão do servidor.');
-        fetchGeminiStatus();
-      }
+      setStoredGeminiKey('');
+      try {
+        await fetch('/api/admin/gemini-key', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ apiKey: '' }),
+        });
+      } catch {}
+      showToast('🔄', 'Restaurado para a chave padrão.');
+      fetchGeminiStatus();
     } catch {
       showToast('⚠️', 'Falha ao restaurar chave padrão.');
     } finally {
@@ -278,37 +314,26 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
     }
   };
 
-  // Test Gemini Connection
+  // Test Gemini Connection (Tested directly and via server)
   const handleTestGemini = async () => {
     if (!isAdmin) return;
     setIsTestingKey(true);
     setTestResponse(null);
 
     try {
-      const res = await fetch('/api/admin/test-gemini', {
-        method: 'POST',
+      const result = await testGeminiConnection(inputApiKey || undefined);
+      setTestResponse({
+        success: true,
+        message: result.message,
+        response: result.response,
       });
-      const data = await res.json();
-      if (data.success) {
-        setTestResponse({
-          success: true,
-          message: data.message || 'Conexão bem sucedida com o Gemini!',
-          response: data.response,
-        });
-        showToast('✨', 'Gemini testado e funcionando!');
-      } else {
-        setTestResponse({
-          success: false,
-          message: data.error || 'O modelo Gemini não respondeu.',
-        });
-        showToast('⚠️', 'Falha ao testar chave Gemini.');
-      }
+      showToast('✨', 'Gemini validado e funcionando com sucesso!');
     } catch (err: any) {
       setTestResponse({
         success: false,
-        message: 'Erro de rede ou servidor ao testar API do Gemini.',
+        message: err?.message || 'Falha ao conectar com o modelo Gemini.',
       });
-      showToast('⚠️', 'Erro ao testar conexão.');
+      showToast('⚠️', 'Falha no teste da conexão.');
     } finally {
       setIsTestingKey(false);
     }
@@ -995,8 +1020,8 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                 </div>
 
                 <div className="flex items-center justify-between pt-1">
-                  <span className="text-[11px] text-gray-400">
-                    A chave fica salva de forma segura no servidor Node.js.
+                  <span className="text-[11px] text-gray-500 font-medium">
+                    ⚡ Funciona automaticamente no <strong>Netlify</strong>, Vercel e servidores Node.js.
                   </span>
                   <button
                     type="submit"
@@ -1009,25 +1034,74 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                 </div>
               </form>
 
-              {/* Instructions */}
-              <div className="p-4 bg-purple-50/70 border border-purple-200 rounded-xl text-xs text-purple-950 space-y-2">
-                <div className="font-extrabold flex items-center gap-1.5">
+              {/* Instructions & Direct Link to Google AI Studio */}
+              <div className="p-4 bg-purple-50/80 border border-purple-200 rounded-xl text-xs text-purple-950 space-y-3">
+                <div className="font-extrabold flex items-center gap-1.5 text-purple-900">
                   <Sparkles className="w-4 h-4 text-purple-700" />
-                  <span>Como obter uma chave gratuita do Gemini:</span>
+                  <span>Como obter sua chave gratuita do Gemini:</span>
                 </div>
-                <p className="text-[11px] leading-relaxed text-purple-900/80">
-                  Você pode gerar uma chave de API gratuita diretamente pelo Google AI Studio em menos de 1 minuto, sem necessidade de cartão de crédito:
-                </p>
-                <div className="pt-1">
-                  <a
-                    href="https://aistudio.google.com/app/apikey"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center gap-1.5 text-xs font-bold text-purple-800 hover:text-purple-950 underline cursor-pointer"
-                  >
-                    <span>Abrir Google AI Studio (Get API Key)</span>
-                    <ExternalLink className="w-3 h-3" />
-                  </a>
+
+                <div className="space-y-1.5 text-[11px] text-purple-900/90 leading-relaxed">
+                  <div className="flex items-start gap-1.5">
+                    <span className="font-black text-purple-700">1.</span>
+                    <span>Acesse a página oficial de chaves do <strong>Google AI Studio</strong>:</span>
+                  </div>
+                  
+                  {/* Link Box with Copy Button */}
+                  <div className="flex items-center gap-2 p-2 bg-white/90 border border-purple-200 rounded-lg">
+                    <span className="font-mono text-purple-900 text-[11px] flex-1 truncate select-all">
+                      https://aistudio.google.com/apikey
+                    </span>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText('https://aistudio.google.com/apikey');
+                        setHasCopiedLink(true);
+                        showToast('📋', 'Link copiado! Cole no seu navegador.');
+                        setTimeout(() => setHasCopiedLink(false), 3000);
+                      }}
+                      className="px-2.5 py-1 bg-purple-100 hover:bg-purple-200 text-purple-900 rounded text-[11px] font-bold flex items-center gap-1 cursor-pointer transition shrink-0"
+                      title="Copiar URL para abrir no navegador"
+                    >
+                      {hasCopiedLink ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-emerald-600" />
+                          <span className="text-emerald-700">Copiado!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5" />
+                          <span>Copiar Link</span>
+                        </>
+                      )}
+                    </button>
+
+                    <a
+                      href="https://aistudio.google.com/apikey"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-2.5 py-1 bg-[#0D134C] hover:bg-[#1a2060] text-white rounded text-[11px] font-bold flex items-center gap-1 cursor-pointer transition shrink-0"
+                    >
+                      <span>Abrir Site</span>
+                      <ExternalLink className="w-3 h-3 text-[#BAFF38]" />
+                    </a>
+                  </div>
+
+                  <div className="flex items-start gap-1.5 pt-1">
+                    <span className="font-black text-purple-700">2.</span>
+                    <span>Entre com sua conta Google (qualquer conta @gmail.com comum).</span>
+                  </div>
+
+                  <div className="flex items-start gap-1.5">
+                    <span className="font-black text-purple-700">3.</span>
+                    <span>Clique no botão azul <strong>&quot;Create API key&quot;</strong> (Criar chave de API).</span>
+                  </div>
+
+                  <div className="flex items-start gap-1.5">
+                    <span className="font-black text-purple-700">4.</span>
+                    <span>Copie a chave gerada (inicia com <code>AIzaSy...</code>) e cole no campo acima!</span>
+                  </div>
                 </div>
               </div>
             </div>

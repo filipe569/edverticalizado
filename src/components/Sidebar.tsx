@@ -42,7 +42,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenLogin,
 }) => {
   const { concursos, activeConcurso, switchConcurso } = useConcurso();
-  const { currentUser } = useAuth();
+  const { currentUser, logout } = useAuth();
 
   // Calculate days to exam
   const daysToExam = React.useMemo(() => {
@@ -245,15 +245,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   )}
                 </button>
               )}
-              {onOpenLogin && (
-                <button
-                  onClick={onOpenLogin}
-                  className="p-1.5 rounded-lg text-white/70 hover:text-[#BAFF38] hover:bg-white/10 transition cursor-pointer"
-                  title="Trocar de usuário / Sair"
-                >
-                  <LogOut className="w-3.5 h-3.5" />
-                </button>
-              )}
+              <button
+                onClick={() => logout()}
+                className="p-1.5 rounded-lg text-white/70 hover:text-red-400 hover:bg-white/10 transition cursor-pointer"
+                title="Desconectar / Sair"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+              </button>
             </div>
           </div>
         )}

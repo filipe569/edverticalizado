@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useConcurso } from '../context/ConcursoContext';
 import { DISC_CORES } from '../data/defaultConcursos';
+import { generateScheduleWithAI } from '../services/geminiService';
 import {
   Sparkles,
   Brain,
@@ -88,32 +89,27 @@ export const AICronogramaView: React.FC<AICronogramaViewProps> = ({
     setErrorMessage(null);
 
     try {
-      const res = await fetch('/api/ai/generate-schedule', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          concursoInfo: {
-            concurso: activeConcurso.nome,
-            cargo: activeConcurso.cargo,
-            banca: activeConcurso.banca,
-            dataProva: activeConcurso.dataProva,
-          },
-          disciplinas: activeConcurso.disciplinas,
-          proficiencia: proficiencias,
-          horasSemanais,
-          diasDisponiveis,
-          focoDesejado,
-        }),
+      const scheduleData = await generateScheduleWithAI({
+        concursoInfo: {
+          concurso: activeConcurso.nome,
+          cargo: activeConcurso.cargo,
+          banca: activeConcurso.banca,
+          dataProva: activeConcurso.dataProva,
+        },
+        disciplinas: activeConcurso.disciplinas,
+        proficiencia: proficiencias,
+        horasSemanais,
+        diasDisponiveis,
+        focoDesejado,
       });
 
-      const json = await res.json();
-      if (!res.ok) {
-        throw new Error(json.error || 'Erro na resposta do servidor.');
+      if (!scheduleData || !scheduleData.cronogramaSemanal) {
+        throw new Error('Não foi possível gerar a estrutura do cronograma.');
       }
 
-      saveAICronograma(json.data);
-      if (json.data.cronogramaSemanal?.length > 0) {
-        setActiveDayTab(json.data.cronogramaSemanal[0].dia);
+      saveAICronograma(scheduleData);
+      if (scheduleData.cronogramaSemanal?.length > 0) {
+        setActiveDayTab(scheduleData.cronogramaSemanal[0].dia);
       }
       showToast('🚀', 'Cronograma adaptativo e categorias geradas com sucesso!');
     } catch (err: any) {

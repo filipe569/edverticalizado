@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useConcurso } from '../context/ConcursoContext';
 import { Concurso, Disciplina } from '../types/concurso';
+import { parseEditalWithAI } from '../services/geminiService';
 import {
   X,
   Plus,
@@ -142,18 +143,13 @@ export const ConcursoManagerModal: React.FC<ConcursoManagerModalProps> = ({
     setAiPreview(null);
 
     try {
-      const res = await fetch('/api/ai/parse-edital', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rawText: aiRawText }),
-      });
+      const parsedData = await parseEditalWithAI(aiRawText);
 
-      const json = await res.json();
-      if (!res.ok) {
-        throw new Error(json.error || 'Erro ao processar com IA.');
+      if (!parsedData || !parsedData.disciplinas) {
+        throw new Error('Não foi possível estruturar as disciplinas do edital.');
       }
 
-      setAiPreview(json.data);
+      setAiPreview(parsedData);
       showToast('✨', 'Edital lido com sucesso pela IA! Revise e confirme.');
     } catch (err: any) {
       console.error(err);

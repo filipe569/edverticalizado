@@ -12,6 +12,7 @@ import { ConcursoManagerModal } from './components/ConcursoManagerModal';
 import { BackupModal } from './components/BackupModal';
 import { UserManagementModal } from './components/UserManagementModal';
 import { LoginModal } from './components/LoginModal';
+import { LoginPage } from './components/LoginPage';
 import {
   Menu,
   Clock,
@@ -32,7 +33,7 @@ import {
 
 const AppContent: React.FC = () => {
   const { activeConcurso, toast, showToast } = useConcurso();
-  const { currentUser } = useAuth();
+  const { currentUser, logout } = useAuth();
 
   const [activeTab, setActiveTab] = useState<string>('estudos');
   const [isConcursoModalOpen, setIsConcursoModalOpen] = useState(false);
@@ -40,6 +41,11 @@ const AppContent: React.FC = () => {
   const [isUserModalOpen, setIsUserModalOpen] = useState(false);
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+
+  // If no user is authenticated, render the dedicated full-screen login page
+  if (!currentUser) {
+    return <LoginPage />;
+  }
 
   // Prefill state for the Cronômetro
   const [cronoPrefill, setCronoPrefill] = useState<{
@@ -219,14 +225,17 @@ const AppContent: React.FC = () => {
               <span>Trocar Concurso</span>
             </button>
 
-            {/* Trocar Usuário / Sair */}
+            {/* Sair / Logout */}
             <button
-              onClick={() => setIsLoginModalOpen(true)}
+              onClick={() => {
+                logout();
+                showToast('👋', 'Sessão encerrada com sucesso.');
+              }}
               className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border border-gray-200 text-xs font-bold text-gray-700 hover:border-red-400 hover:text-red-600 transition cursor-pointer"
-              title="Trocar de Usuário"
+              title="Desconectar e voltar para a tela de login"
             >
               <LogOut className="w-3.5 h-3.5 text-gray-500" />
-              <span className="hidden xs:inline">Trocar Usuário</span>
+              <span className="hidden xs:inline">Sair</span>
             </button>
 
             {/* Save indicator button */}
