@@ -1,0 +1,6 @@
+{
+  "name": "Edital Verticalizado Multi-Concurso & Cronograma IA",
+  "description": "Sistema avançado de edital verticalizado multi-concurso com cronômetro, histórico, calendário, revisões espaçadas e inteligência artificial para leitura de editais e cronogramas semanais adaptativos.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
